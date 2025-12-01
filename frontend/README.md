@@ -1,7 +1,7 @@
 # Taxinator Frontend
 
-This React + Vite single-page application provides the control center for configuring and
-monitoring the tax-processing middleware.
+A React + Vite dashboard that demonstrates how providers, auditors, and tax engines would
+interact with the middleware API.
 
 ## Getting started
 
@@ -10,8 +10,12 @@ npm install
 npm run dev
 ```
 
-## Project layout
+The UI expects the FastAPI backend to be running locally at `/api`. For each request the app
+sends a role header to mimic personas (provider, admin, tax_engine, auditor).
 
-- `src/App.tsx`: Root application shell showcasing the integration workflow.
-- `src/styles`: Global styling primitives.
-- `public assets`: Managed via Vite using the project root.
+## Features
+
+- Health panel to verify the backend is reachable.
+- Editor preloaded with the backend's sample ingestion payload for quick normalization tests.
+- Job list with translation trigger to downstream vendors (FIS/WSC examples).
+- Vendor template viewer to understand required fields and mapping notes.
