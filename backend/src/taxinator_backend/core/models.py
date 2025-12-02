@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -274,3 +274,24 @@ class TranslationResponse(BaseModel):
     status: JobStatus
     payload: TranslationPayload
     normalized: List[NormalizedTransaction] | None = None
+
+
+class AITranslateRequest(BaseModel):
+    """Request payload for AI-assisted translation."""
+
+    input_text: str = Field(description="Freeform text or JSON to translate and validate")
+    vendor_target: Optional[str] = Field(default=None, description="Optional downstream vendor format")
+    include_checks: bool = True
+    include_normalized: bool = True
+    attachments: Optional[Dict[str, Any]] = None
+
+
+class AITranslateResponse(BaseModel):
+    """Response from AI translator."""
+
+    status: str
+    vendor_target: Optional[str]
+    plan: str
+    translation: str
+    checks: List[str]
+    notes: List[str] = []

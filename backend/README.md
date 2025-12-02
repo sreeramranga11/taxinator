@@ -15,6 +15,12 @@ uvicorn taxinator_backend.main:app --reload
 Include the `X-User-Role` header on requests to simulate personas: `broker_admin`, `internal_ops`,
 `api_client`, or `tax_engine`.
 
+### AI translator
+
+- Set `OPENAI_API_KEY` in `.env`.
+- Use `POST /api/ai/translate` with `{ "input_text": "...", "vendor_target": "fis" }` to receive an
+  AI-generated plan, validation checks, and draft translation.
+
 ## Project layout
 
 - `src/taxinator_backend/core`: Configuration, domain models, and shared utilities.

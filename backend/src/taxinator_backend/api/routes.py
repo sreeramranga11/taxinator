@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from taxinator_backend.core.config import metadata
 from taxinator_backend.core.models import (
+    AITranslateRequest,
+    AITranslateResponse,
     CostBasisIngestRequest,
     IngestionRequest,
     IngestionResponse,
@@ -37,6 +39,7 @@ from taxinator_backend.core.services import (
     start_job,
     transform,
 )
+from taxinator_backend.core.ai import ai_translate
 
 router = APIRouter()
 
@@ -96,6 +99,18 @@ async def legacy_ingestion(
     role: UserRole = Depends(require_role(UserRole.PROVIDER, UserRole.BROKER_ADMIN, UserRole.API_CLIENT)),
 ) -> IngestionResponse:
     return ingest_legacy(request)
+
+
+@router.post(
+    "/ai/translate",
+    response_model=AITranslateResponse,
+    summary="AI-assisted translation and validation",
+)
+async def ai_translate_route(
+    request: AITranslateRequest,
+    role: UserRole = Depends(require_role(*metadata.supported_roles)),
+) -> AITranslateResponse:
+    return ai_translate(request)
 
 
 @router.post("/jobs/start", response_model=StartJobResponse, summary="Start a new tax job")

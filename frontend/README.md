@@ -17,6 +17,11 @@ If your backend runs on a different host/port, set `VITE_API_BASE` to the full b
 `http://localhost:8000/api`) when starting dev/preview/build so health checks and API calls
 resolve correctly.
 
+## AI translator
+
+- Add `OPENAI_API_KEY` to `.env` at the repo root.
+- The dashboard exposes an “AI translator & planner” section to paste JSON/text and get a vendor-ready draft plus validation checks using the agent endpoint (`/api/ai/translate`).
+
 ## Features
 
 - Health panel to verify the backend is reachable.

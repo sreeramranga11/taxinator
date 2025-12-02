@@ -16,6 +16,19 @@ formats with webhook signals for downstream processing.
 - **Reconciliation friction** – aligns cost-basis feeds with personal info to avoid export failures.
 - **Vendor sprawl** – renders downstream payloads (e.g., FIS, WSC) from a single normalized job store.
 - **Operational visibility** – surfaces job status, warnings, and export readiness via API + UI.
+- **AI-assisted translation** – paste any payload and let the agent draft a translation plan plus validation checks.
+
+## AI agent translator (new)
+
+```
+┌───────────────┐  Paste JSON/text  ┌──────────────┐  Plan + checks + draft  ┌──────────────┐
+│ Your payload  │ ────────────────► │ AI agent API │ ───────────────────────►│ Vendor-ready │
+│ (file/text)   │                   │              │                         │ draft payload│
+└───────────────┘                   └──────────────┘                         └──────────────┘
+```
+
+- Enable with `OPENAI_API_KEY` in `.env`.
+- Frontend surfaces an “AI translator & planner” panel to make this the primary workflow.
 
 ## System shape (text diagrams)
 
