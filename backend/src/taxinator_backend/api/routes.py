@@ -1,4 +1,4 @@
-"""FastAPI route definitions."""
+"""FastAPI route definitions for the tax processor middleware."""
 
 from __future__ import annotations
 
@@ -9,15 +9,32 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from taxinator_backend.core.config import metadata
 from taxinator_backend.core.models import (
-    IngestionRequest,
+    CostBasisIngestRequest,
     IngestionResponse,
     JobRecord,
+    PersonalInfoIngestRequest,
+    ReconciliationReport,
+    StartJobRequest,
+    StartJobResponse,
+    TradesIngestRequest,
     TranslationRequest,
     TranslationResponse,
     UserRole,
     VendorTemplate,
 )
-from taxinator_backend.core.services import VENDOR_TEMPLATES, get_job, ingest, list_jobs, translate
+from taxinator_backend.core.services import (
+    VENDOR_TEMPLATES,
+    export,
+    get_job,
+    ingest_cost_basis,
+    ingest_personal_info,
+    ingest_trades,
+    list_jobs,
+    reconcile,
+    reset_store,
+    start_job,
+    transform,
+)
 
 router = APIRouter()
 
@@ -26,14 +43,12 @@ async def _role_dependency(x_user_role: Annotated[str | None, Header()] = None) 
     if not x_user_role:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-User-Role header; specify admin, provider, tax_engine, or auditor.",
+            detail="Missing X-User-Role header; specify broker_admin, internal_ops, api_client, or tax_engine.",
         )
     try:
-        role = UserRole(x_user_role)
+        return UserRole(x_user_role)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    return role
 
 
 def require_role(*allowed: UserRole):
@@ -50,8 +65,6 @@ def require_role(*allowed: UserRole):
 
 @router.get("/health", summary="Health check")
 async def health_check() -> dict[str, str]:
-    """Return service metadata for uptime monitoring."""
-
     return {
         "service": metadata.name,
         "version": metadata.version,
@@ -66,52 +79,65 @@ async def supported_roles() -> dict[str, list[str]]:
     return {"roles": [role.value for role in metadata.supported_roles]}
 
 
-@router.get("/schema/standard", summary="Describe normalized transaction schema")
-async def standard_schema() -> dict[str, list[dict[str, str]]]:
-    schema = [
-        {"field": "transaction_id", "type": "string", "required": "yes", "notes": "Vendor provided"},
-        {"field": "asset_symbol", "type": "string", "required": "yes", "notes": "Ticker or token"},
-        {"field": "quantity", "type": "decimal", "required": "yes", "notes": "Up to 10 decimal places"},
-        {"field": "cost_basis", "type": "decimal", "required": "yes", "notes": "USD"},
-        {"field": "proceeds", "type": "decimal", "required": "yes", "notes": "USD"},
-        {"field": "acquisition_date", "type": "date", "required": "yes", "notes": "ISO-8601"},
-        {"field": "disposition_date", "type": "date", "required": "yes", "notes": "ISO-8601"},
-        {"field": "lot_method", "type": "string", "required": "no", "notes": "FIFO/LIFO/SpecID"},
-        {"field": "memo", "type": "string", "required": "no", "notes": "Optional context"},
-    ]
-    return {"fields": schema}
-
-
 @router.get("/templates", summary="Downstream vendor templates", response_model=list[VendorTemplate])
 async def templates() -> list[VendorTemplate]:
     return list(VENDOR_TEMPLATES.values())
 
 
+@router.post("/jobs/start", response_model=StartJobResponse, summary="Start a new tax job")
+async def start_tax_job(
+    request: StartJobRequest,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.INTERNAL_OPS)),
+) -> StartJobResponse:
+    return start_job(request)
+
+
 @router.post(
-    "/ingestions",
-    summary="Ingest and normalize cost-basis transactions",
+    "/ingest/costbasis",
     response_model=IngestionResponse,
+    summary="Upload cost-basis dataset for a job",
 )
-async def ingest_transactions(
-    request: IngestionRequest, role: UserRole = Depends(require_role(UserRole.ADMIN, UserRole.PROVIDER))
+async def upload_cost_basis(
+    request: CostBasisIngestRequest,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.API_CLIENT)),
 ) -> IngestionResponse:
-    return ingest(request)
+    try:
+        return ingest_cost_basis(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
 
 
-@router.get(
-    "/jobs",
-    summary="List ingestion jobs",
-    response_model=list[JobRecord],
+@router.post(
+    "/ingest/personal-info",
+    summary="Upload personal info dataset",
 )
-async def jobs(role: UserRole = Depends(require_role(UserRole.ADMIN, UserRole.AUDITOR, UserRole.TAX_ENGINE))):
+async def upload_personal_info(
+    request: PersonalInfoIngestRequest,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.API_CLIENT, UserRole.INTERNAL_OPS)),
+) -> dict:
+    try:
+        return ingest_personal_info(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+
+
+@router.post("/ingest/trades", summary="Upload trade activity")
+async def upload_trades(
+    request: TradesIngestRequest,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.API_CLIENT, UserRole.INTERNAL_OPS)),
+) -> dict:
+    try:
+        return ingest_trades(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+
+
+@router.get("/jobs", response_model=list[JobRecord], summary="List jobs")
+async def jobs(role: UserRole = Depends(require_role(*metadata.supported_roles))) -> list[JobRecord]:
     return list_jobs()
 
 
-@router.get(
-    "/jobs/{job_id}",
-    summary="Fetch a single job",
-    response_model=JobRecord,
-)
+@router.get("/jobs/{job_id}", response_model=JobRecord, summary="Job detail")
 async def job_detail(job_id: str, role: UserRole = Depends(require_role(*metadata.supported_roles))):
     try:
         return get_job(job_id)
@@ -120,17 +146,48 @@ async def job_detail(job_id: str, role: UserRole = Depends(require_role(*metadat
 
 
 @router.post(
-    "/jobs/{job_id}/translate",
-    summary="Translate normalized data for a downstream vendor",
+    "/jobs/{job_id}/transform",
     response_model=TranslationResponse,
+    summary="Transform normalized data for Vendor #2",
 )
-async def translate_job(
+async def transform_job(
     job_id: str,
     request: TranslationRequest,
-    role: UserRole = Depends(require_role(UserRole.ADMIN, UserRole.TAX_ENGINE)),
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.INTERNAL_OPS, UserRole.TAX_ENGINE)),
 ) -> TranslationResponse:
     try:
-        return translate(job_id, request)
+        return transform(job_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/jobs/{job_id}/reconcile",
+    response_model=ReconciliationReport,
+    summary="Reconcile transactions and personal info",
+)
+async def reconcile_job(
+    job_id: str,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.INTERNAL_OPS)),
+) -> ReconciliationReport:
+    try:
+        return reconcile(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+
+
+@router.post(
+    "/jobs/{job_id}/export",
+    summary="Export vendor-ready payload and emit webhook",
+)
+async def export_job(
+    job_id: str,
+    role: UserRole = Depends(require_role(UserRole.BROKER_ADMIN, UserRole.TAX_ENGINE)),
+):
+    try:
+        return export(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
     except ValueError as exc:
@@ -138,15 +195,30 @@ async def translate_job(
 
 
 @router.get(
+    "/jobs/{job_id}/output",
+    summary="Retrieve exported payload",
+)
+async def job_output(job_id: str, role: UserRole = Depends(require_role(*metadata.supported_roles))):
+    try:
+        job = get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+    payload = job.translations.get(job.vendor_target)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No exported payload available")
+    return payload
+
+
+@router.get(
     "/playbooks/sample-ingestion",
-    summary="Provide a ready-to-send sample payload",
+    summary="Provide ready-to-send sample payloads",
 )
 async def sample_ingestion() -> dict[str, object]:
     sample = {
-        "vendor": {"name": "Upstream Cost Basis", "kind": "cost_basis", "contact": "vendor@cb.io"},
-        "payload_source": "sandbox-upload",
-        "tags": ["demo", "equities"],
-        "transactions": [
+        "tax_year": 2024,
+        "vendor_source": "demo_cost_basis_vendor",
+        "vendor_target": "fis",
+        "cost_basis": [
             {
                 "transaction_id": "TX-1001",
                 "account_id": "ACC-001",
@@ -157,10 +229,10 @@ async def sample_ingestion() -> dict[str, object]:
                 "acquisition_date": "2023-01-10",
                 "disposition_date": "2023-09-20",
                 "lot_method": "FIFO",
-                "memo": "Exercise + sell",
+                "memo": "exercise + sell",
             },
             {
-                "transaction_id": "TX-1002",
+                "transaction_id": "TX-CR-1",
                 "account_id": "ACC-002",
                 "asset_symbol": "ETH",
                 "quantity": "2.5",
@@ -168,10 +240,33 @@ async def sample_ingestion() -> dict[str, object]:
                 "proceeds": "2800.00",
                 "acquisition_date": "2022-05-05",
                 "disposition_date": "2024-03-01",
+                "wallet_address": "0xabc123",
                 "lot_method": "SpecID",
-                "memo": "Crypto sale",
+                "memo": "crypto sale",
+            },
+        ],
+        "personal_info": [
+            {
+                "customer_id": "ACC-001",
+                "tin": "123-45-6789",
+                "full_name": "Jamie Example",
+                "address": "123 Market Street, SF CA",
+                "email": "jamie@example.com",
+            },
+            {
+                "customer_id": "ACC-002",
+                "tin": "321-54-9876",
+                "full_name": "Taylor Ops",
+                "address": "500 Mission St, SF CA",
+                "email": "taylor@example.com",
             },
         ],
     }
     return {"generated_at": date.today().isoformat(), "payload": sample}
+
+
+@router.post("/admin/reset", include_in_schema=False)
+async def reset(role: UserRole = Depends(require_role(UserRole.INTERNAL_OPS))):
+    reset_store()
+    return {"status": "reset"}
 

@@ -1,7 +1,7 @@
 # Taxinator Backend
 
-This FastAPI service provides the middleware layer that normalizes, validates, and translates
-cost-basis data into tax-engine ready payloads.
+This FastAPI service provides the middleware layer that normalizes, validates, reconciles, and
+translates cost-basis + personal info data into tax-engine ready payloads.
 
 ## Getting started
 
@@ -12,8 +12,8 @@ pip install -e .[dev]
 uvicorn taxinator_backend.main:app --reload
 ```
 
-Include the `X-User-Role` header on requests to simulate personas: `admin`, `provider`,
-`tax_engine`, or `auditor`.
+Include the `X-User-Role` header on requests to simulate personas: `broker_admin`, `internal_ops`,
+`api_client`, or `tax_engine`.
 
 ## Project layout
 
@@ -25,16 +25,19 @@ Include the `X-User-Role` header on requests to simulate personas: `admin`, `pro
 
 - `GET /api/health` – service metadata and uptime check.
 - `GET /api/roles` – advertised personas the API understands.
-- `GET /api/schema/standard` – contract for normalized transaction payloads.
 - `GET /api/templates` – downstream vendor payload templates (FIS/WSC examples).
-- `GET /api/playbooks/sample-ingestion` – ready-to-send sample payload to test ingestion.
-- `POST /api/ingestions` – accept and normalize transactions from upstream providers.
-- `GET /api/jobs` / `GET /api/jobs/{job_id}` – retrieve normalized jobs and warnings.
-- `POST /api/jobs/{job_id}/translate` – render payloads for downstream tax engines.
+- `POST /api/jobs/start` – create a new job (tax year + vendors) with status `pending_upload`.
+- `POST /api/ingest/personal-info` – upload PII/identity records for a job.
+- `POST /api/ingest/costbasis` – upload cost-basis payloads; auto-normalizes + validates.
+- `POST /api/ingest/trades` – upload optional trade history for reconciliation.
+- `POST /api/jobs/{job_id}/transform` – convert normalized data into Vendor #2 format.
+- `POST /api/jobs/{job_id}/reconcile` – reconcile transactions with PII and totals.
+- `POST /api/jobs/{job_id}/export` – deliver vendor-ready payload + webhook event.
+- `GET /api/jobs` / `GET /api/jobs/{job_id}` – retrieve job status and reports.
 
 ## Personas
 
-- **Provider** – submits cost-basis transactions for normalization.
-- **Tax engine** – triggers translations for downstream vendor formats.
-- **Admin** – full access for configuration and operational overrides.
-- **Auditor** – read-only access for monitoring and reconciliation.
+- **Broker admin** – uploads cost basis + PII and triggers the job pipeline.
+- **Internal ops** – views ingestion logs, reprocesses, reconciles, and manages mappings.
+- **API client** – headless ingestion for partner automation.
+- **Tax engine** – triggers transformations/exports to Vendor #2.

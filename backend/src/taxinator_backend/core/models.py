@@ -13,10 +13,10 @@ from pydantic import BaseModel, Field, computed_field
 class UserRole(str, Enum):
     """Supported user personas for the service."""
 
-    ADMIN = "admin"
-    PROVIDER = "provider"  # upstream cost-basis vendor
-    TAX_ENGINE = "tax_engine"  # downstream filing vendor
-    AUDITOR = "auditor"  # internal compliance/review
+    BROKER_ADMIN = "broker_admin"
+    INTERNAL_OPS = "internal_ops"
+    API_CLIENT = "api_client"
+    TAX_ENGINE = "tax_engine"
 
 
 class Party(BaseModel):
@@ -43,15 +43,18 @@ class TransactionInput(BaseModel):
         description="Accounting method used by the provider (FIFO/LIFO/Specific Identification)",
     )
     cost_basis_source: Optional[str] = None
+    wallet_address: Optional[str] = Field(default=None, description="Digital asset source wallet")
     memo: Optional[str] = None
 
 
-class ValidationWarning(BaseModel):
-    """Non-blocking validation warnings for ingestion."""
+class ValidationIssue(BaseModel):
+    """A structured validation issue used for errors and warnings."""
 
     code: str
     message: str
+    severity: str = Field(description="error or warning")
     transaction_id: Optional[str] = None
+    suggestion: Optional[str] = None
 
 
 class NormalizedTransaction(TransactionInput):
@@ -84,6 +87,27 @@ class JobSummary(BaseModel):
     long_term_count: int
 
 
+class IngestionSummary(BaseModel):
+    """Captures ingestion level statistics and schema observations."""
+
+    total_rows: int
+    malformed_rows: int
+    missing_fields: List[str]
+    unexpected_fields: List[str]
+    potential_schema_drift: bool
+
+
+class PersonalInfoRecord(BaseModel):
+    """PII details required for filings."""
+
+    customer_id: str
+    tin: str
+    full_name: str
+    address: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
 class IngestionRequest(BaseModel):
     """Payload accepted from cost-basis vendors."""
 
@@ -93,32 +117,123 @@ class IngestionRequest(BaseModel):
     tags: List[str] | None = None
 
 
+class CostBasisIngestRequest(BaseModel):
+    """Cost-basis upload payload for a specific job."""
+
+    job_id: str
+    vendor_format: Optional[str] = None
+    records: List[dict]
+
+
+class PersonalInfoIngestRequest(BaseModel):
+    """Personal info upload payload."""
+
+    job_id: str
+    records: List[PersonalInfoRecord]
+
+
+class TradesIngestRequest(BaseModel):
+    """Optional supplementary trade history ingest."""
+
+    job_id: str
+    trades: List[dict]
+
+
 class IngestionResponse(BaseModel):
     """Result of normalizing a batch of transactions."""
 
     job_id: str
     summary: JobSummary
+    ingestion_summary: IngestionSummary
     normalized: List[NormalizedTransaction]
-    warnings: List[ValidationWarning]
+    validation: "ValidationReport"
 
 
 class JobStatus(str, Enum):
-    ACCEPTED = "accepted"
-    NORMALIZED = "normalized"
-    TRANSLATED = "translated"
+    PENDING_UPLOAD = "pending_upload"
+    INGESTED = "ingested"
+    VALIDATION_FAILED = "validation_failed"
+    READY_FOR_TRANSFORMATION = "ready_for_transformation"
+    TRANSFORMED = "transformed"
+    READY_FOR_EXPORT = "ready_for_export"
+    RECONCILIATION_FAILED = "reconciliation_failed"
+    COMPLETED = "completed"
+
+
+class ValidationReport(BaseModel):
+    """Structured validation results for a job."""
+
+    errors: List[ValidationIssue]
+    warnings: List[ValidationIssue]
+    suggested_fixes: List[str]
+
+
+class TransformationSummary(BaseModel):
+    """Captures output of the transformation step."""
+
+    tax_year: int
+    vendor_key: str
+    lots_created: int
+    wash_sales_detected: int
+    gain_loss_records: int
+    notes: List[str] = []
+
+
+class ReconciliationReport(BaseModel):
+    """Reconciliation results between datasets."""
+
+    matched_accounts: int
+    mismatched_accounts: List[str]
+    gain_loss_alignment: bool
+    notes: List[str]
+
+
+class ExportReport(BaseModel):
+    """Final export details and webhook events."""
+
+    format: str
+    download_url: str
+    delivered: bool
+    webhook_event: str
 
 
 class JobRecord(BaseModel):
     """Persisted view of a job in memory."""
 
     job_id: str
-    vendor: Party
-    payload_source: str
+    tax_year: int
+    vendor_source: str
+    vendor_target: str
     status: JobStatus
     normalized: List[NormalizedTransaction]
-    warnings: List[ValidationWarning]
-    tags: List[str]
+    warnings: List[ValidationIssue]
+    ingestion_summary: Optional[IngestionSummary] = None
+    validation_report: Optional[ValidationReport] = None
+    transformation: Optional[TransformationSummary] = None
+    reconciliation: Optional[ReconciliationReport] = None
+    export_report: Optional[ExportReport] = None
     translations: Dict[str, "TranslationPayload"]
+    personal_info: List[PersonalInfoRecord] = []
+    raw_cost_basis: List[dict] = []
+    raw_trades: List[dict] = []
+    started_by: UserRole
+
+
+class StartJobRequest(BaseModel):
+    """Initialize a new job before uploads arrive."""
+
+    tax_year: int
+    vendor_source: str
+    vendor_target: str
+    started_by: UserRole
+
+
+class StartJobResponse(BaseModel):
+    job_id: str
+    status: JobStatus
+    vendor_source: str
+    vendor_target: str
+    tax_year: int
 
 
 class VendorTemplate(BaseModel):

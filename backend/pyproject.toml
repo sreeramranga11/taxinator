@@ -42,3 +42,4 @@ target-version = "py311"
 minversion = "8.0"
 addopts = "-ra"
 testpaths = ["tests"]
+pythonpath = ["src"]
