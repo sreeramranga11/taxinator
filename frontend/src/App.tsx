@@ -46,24 +46,8 @@ type TranslationResponse = {
   payload: { vendor_key: string; records: unknown[]; human_readable?: string };
 };
 
-const defaultRole = "provider";
-
-async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-User-Role": defaultRole,
-      ...(options?.headers || {}),
-    },
-  });
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return (await response.json()) as T;
-}
-
 export function App() {
+  const [activeRole, setActiveRole] = useState("provider");
   const [health, setHealth] = useState<Health | null>(null);
   const [templates, setTemplates] = useState<VendorTemplate[]>([]);
   const [samplePayload, setSamplePayload] = useState<string>("");
@@ -71,19 +55,36 @@ export function App() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [translation, setTranslation] = useState<TranslationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preferredVendor, setPreferredVendor] = useState("fis");
+
+  const fetchJson = async <T,>(path: string, role: string, options?: RequestInit): Promise<T> => {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-User-Role": role,
+        ...(options?.headers || {}),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return (await response.json()) as T;
+  };
 
   useEffect(() => {
-    fetchJson<Health>("/api/health", { headers: { "X-User-Role": "admin" } })
+    fetchJson<Health>("/api/health", "admin")
       .then(setHealth)
       .catch(() => setHealth(null));
 
-    fetchJson<VendorTemplate[]>("/api/templates", { headers: { "X-User-Role": "admin" } })
-      .then(setTemplates)
+    fetchJson<VendorTemplate[]>("/api/templates", "admin")
+      .then((data) => {
+        setTemplates(data);
+        setPreferredVendor(data[0]?.vendor_key ?? "fis");
+      })
       .catch(() => setTemplates([]));
 
-    fetchJson<{ payload: unknown }>("/api/playbooks/sample-ingestion", {
-      headers: { "X-User-Role": "admin" },
-    })
+    fetchJson<{ payload: unknown }>("/api/playbooks/sample-ingestion", "admin")
       .then((payload) => setSamplePayload(JSON.stringify(payload.payload, null, 2)))
       .catch(() => setSamplePayload(""));
 
@@ -91,7 +92,7 @@ export function App() {
   }, []);
 
   const refreshJobs = () => {
-    fetchJson<JobRecord[]>("/api/jobs", { headers: { "X-User-Role": "auditor" } })
+    fetchJson<JobRecord[]>("/api/jobs", "auditor")
       .then(setJobs)
       .catch(() => setJobs([]));
   };
@@ -100,7 +101,7 @@ export function App() {
     setError(null);
     try {
       const body = JSON.parse(samplePayload);
-      const result = await fetchJson<IngestionResponse>("/api/ingestions", {
+      const result = await fetchJson<IngestionResponse>("/api/ingestions", activeRole, {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -114,9 +115,8 @@ export function App() {
   const handleTranslate = async (jobId: string, vendorKey: string) => {
     setError(null);
     try {
-      const result = await fetchJson<TranslationResponse>(`/api/jobs/${jobId}/translate`, {
+      const result = await fetchJson<TranslationResponse>(`/api/jobs/${jobId}/translate`, "tax_engine", {
         method: "POST",
-        headers: { "X-User-Role": "tax_engine" },
         body: JSON.stringify({ vendor_key: vendorKey, include_normalized: true }),
       });
       setTranslation(result);
@@ -126,26 +126,244 @@ export function App() {
     }
   };
 
-  const firstTemplate = useMemo(() => templates[0]?.vendor_key ?? "fis", [templates]);
+  const firstTemplate = useMemo(() => preferredVendor || templates[0]?.vendor_key || "fis", [preferredVendor, templates]);
+  const personas = [
+    { key: "provider", label: "Provider", note: "Sends cost basis" },
+    { key: "auditor", label: "Auditor", note: "Reads jobs" },
+    { key: "tax_engine", label: "Tax engine", note: "Requests translations" },
+    { key: "admin", label: "Admin", note: "Views health & templates" },
+  ];
+  const totalWarnings = jobs.reduce((acc, job) => acc + job.warnings.length, 0);
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">Stripe-like middleware for tax reporting</p>
-          <h1>Taxinator Control Center</h1>
-          <p>
-            Normalize cost-basis feeds, reconcile discrepancies, and hand off vendor-ready payloads
-            to tax form engines like FIS without brittle spreadsheets.
-          </p>
+    <div className="page">
+      <aside className="sidebar">
+        <div className="identity-card">
+          <div className="avatar">T</div>
+          <div>
+            <p className="eyebrow">Tax processor</p>
+            <h2>Taxinator</h2>
+            <p className="muted">Middleware between cost-basis vendors and downstream tax engines.</p>
+          </div>
         </div>
-        <div className="pill">Role headers required: X-User-Role</div>
-      </header>
 
-      <main className="app-main">
-        <section className="panel">
+        <nav className="nav">
+          <p className="nav-label">Personas</p>
+          <div className="persona-grid">
+            {personas.map((persona) => (
+              <button
+                key={persona.key}
+                className={`chip ${activeRole === persona.key ? "active" : ""}`}
+                onClick={() => setActiveRole(persona.key)}
+              >
+                <span>{persona.label}</span>
+                <small>{persona.note}</small>
+              </button>
+            ))}
+          </div>
+
+          <p className="nav-label">Quick links</p>
+          <ul>
+            <li>Ingestion studio</li>
+            <li>Jobs & translations</li>
+            <li>Vendor templates</li>
+            <li>Health & metadata</li>
+          </ul>
+        </nav>
+
+        <div className="card subtle">
+          <p className="eyebrow">Status</p>
+          <div className="status-row">
+            <span className={`status-dot ${health ? "on" : "off"}`} />
+            <div>
+              <strong>{health ? "Online" : "Idle"}</strong>
+              <p className="muted">{health?.environment ?? "Awaiting connection"}</p>
+            </div>
+          </div>
+          <p className="muted small">Role headers required via X-User-Role.</p>
+        </div>
+      </aside>
+
+      <main className="content">
+        <header className="hero">
+          <div>
+            <p className="eyebrow">Stripe-like middleware for tax reporting</p>
+            <h1>Operations dashboard</h1>
+            <p className="muted">
+              Normalize cost-basis feeds, reconcile discrepancies, and deliver vendor-ready payloads
+              that tax engines can ingest without brittle spreadsheets or manual rework.
+            </p>
+          </div>
+          <div className="hero-meta">
+            <div className="badge ghost">Active persona</div>
+            <div className="pill strong">{activeRole}</div>
+          </div>
+        </header>
+
+        <section className="stat-grid">
+          <div className="card gradient">
+            <p className="eyebrow">Service</p>
+            <h3>{health ? "Healthy" : "Offline"}</h3>
+            <p className="muted">{health?.service ?? "Awaiting backend"}</p>
+          </div>
+          <div className="card">
+            <p className="eyebrow">Templates</p>
+            <h3>{templates.length || "–"}</h3>
+            <p className="muted">Vendor payload definitions ready to translate.</p>
+          </div>
+          <div className="card">
+            <p className="eyebrow">Jobs</p>
+            <h3>{jobs.length}</h3>
+            <p className="muted">Normalized submissions stored this session.</p>
+          </div>
+          <div className="card">
+            <p className="eyebrow">Warnings</p>
+            <h3>{totalWarnings}</h3>
+            <p className="muted">Data quality flags surfaced during normalization.</p>
+          </div>
+        </section>
+
+        <section className="panel highlight">
           <div className="panel-heading">
-            <h2>Service status</h2>
+            <div>
+              <h2>Ingestion studio</h2>
+              <p className="muted">Validate, normalize, and store cost-basis payloads.</p>
+            </div>
+            <button className="btn primary" onClick={handleIngest}>
+              Normalize & store
+            </button>
+          </div>
+          <textarea
+            className="editor"
+            rows={12}
+            value={samplePayload}
+            onChange={(e) => setSamplePayload(e.target.value)}
+          />
+          {error && <p className="error">{error}</p>}
+          {ingestionResult && (
+            <div className="callout">
+              <strong>Job {ingestionResult.job_id}</strong> normalized {" "}
+              {ingestionResult.summary.total_transactions} transaction(s). Short-term: {" "}
+              {ingestionResult.summary.short_term_count}, Long-term: {" "}
+              {ingestionResult.summary.long_term_count}.
+            </div>
+          )}
+        </section>
+
+        <div className="two-column">
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Jobs & translations</h2>
+                <p className="muted">Each ingestion produces a normalized job and translation preview.</p>
+              </div>
+              <div className="panel-actions">
+                <label className="select">
+                  <span>Vendor</span>
+                  <select
+                    value={firstTemplate}
+                    onChange={(e) => setPreferredVendor(e.target.value)}
+                  >
+                    {templates.map((template) => (
+                      <option key={template.vendor_key} value={template.vendor_key}>
+                        {template.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="btn" onClick={refreshJobs}>
+                  Refresh
+                </button>
+              </div>
+            </div>
+            {jobs.length === 0 ? (
+              <p className="muted">No ingestions yet. Submit a payload to see normalized jobs.</p>
+            ) : (
+              <div className="jobs">
+                {jobs.map((job) => (
+                  <article key={job.job_id} className="job-card">
+                    <div className="job-heading">
+                      <div>
+                        <p className="eyebrow">{job.vendor.name}</p>
+                        <h3>{job.job_id}</h3>
+                        <p className="muted">Source: {job.payload_source}</p>
+                      </div>
+                      <span className="badge success">{job.status}</span>
+                    </div>
+                    {job.warnings.length > 0 && (
+                      <ul className="warning-list">
+                        {job.warnings.map((warning) => (
+                          <li key={`${job.job_id}-${warning.code}`}>
+                            <strong>{warning.code}</strong>: {warning.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="job-actions">
+                      <button
+                        className="btn primary"
+                        onClick={() => handleTranslate(job.job_id, firstTemplate)}
+                      >
+                        Translate to {firstTemplate.toUpperCase()}
+                      </button>
+                      <span className="muted">{job.normalized.length} normalized rows</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="panel minimal">
+            <div className="panel-heading">
+              <div>
+                <h2>Vendor templates</h2>
+                <p className="muted">Fields and mapping notes for downstream engines.</p>
+              </div>
+            </div>
+            {templates.length === 0 ? (
+              <p className="muted">No templates returned; check backend.</p>
+            ) : (
+              <div className="templates">
+                {templates.map((template) => (
+                  <div key={template.vendor_key} className="template">
+                    <div className="template-heading">
+                      <h3>{template.display_name}</h3>
+                      <span className="badge">{template.version}</span>
+                    </div>
+                    <p className="muted">Format: {template.format.toUpperCase()}</p>
+                    <p className="muted">Required: {template.required_fields.join(", ")}</p>
+                    <ul className="notes">
+                      {template.mapping_notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        {translation && (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Latest translation</h2>
+                <p className="muted">Preview the downstream payload for the selected vendor.</p>
+              </div>
+              <span className="badge success">{translation.payload.vendor_key}</span>
+            </div>
+            <pre className="code-block">{JSON.stringify(translation.payload, null, 2)}</pre>
+            {translation.payload.human_readable && (
+              <p className="muted">{translation.payload.human_readable}</p>
+            )}
+          </section>
+        )}
+
+        <section className="panel subtle">
+          <div className="panel-heading">
+            <h2>Health & metadata</h2>
             {health ? <span className="badge success">Online</span> : <span className="badge">Idle</span>}
           </div>
           {health ? (
@@ -164,117 +382,6 @@ export function App() {
             <p className="muted">Unable to reach backend. Ensure `uvicorn` is running.</p>
           )}
         </section>
-
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Ingest cost-basis payload</h2>
-            <button className="btn primary" onClick={handleIngest}>
-              Normalize & store
-            </button>
-          </div>
-          <p className="muted">Payloads are validated and enriched; warnings remain non-blocking.</p>
-          <textarea
-            className="editor"
-            rows={14}
-            value={samplePayload}
-            onChange={(e) => setSamplePayload(e.target.value)}
-          />
-          {error && <p className="error">{error}</p>}
-          {ingestionResult && (
-            <div className="callout">
-              <strong>Job {ingestionResult.job_id}</strong> normalized with {" "}
-              {ingestionResult.summary.total_transactions} transaction(s). Short-term: {" "}
-              {ingestionResult.summary.short_term_count}, Long-term: {" "}
-              {ingestionResult.summary.long_term_count}.
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Jobs & translations</h2>
-            <button className="btn" onClick={refreshJobs}>
-              Refresh
-            </button>
-          </div>
-          {jobs.length === 0 ? (
-            <p className="muted">No ingestions yet. Submit a payload to see normalized jobs.</p>
-          ) : (
-            <div className="jobs">
-              {jobs.map((job) => (
-                <article key={job.job_id} className="job-card">
-                  <div className="job-heading">
-                    <div>
-                      <p className="eyebrow">{job.vendor.name}</p>
-                      <h3>{job.job_id}</h3>
-                      <p className="muted">Source: {job.payload_source}</p>
-                    </div>
-                    <span className="badge success">{job.status}</span>
-                  </div>
-                  {job.warnings.length > 0 && (
-                    <ul className="warning-list">
-                      {job.warnings.map((warning) => (
-                        <li key={warning.code}>
-                          <strong>{warning.code}</strong>: {warning.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <div className="job-actions">
-                    <button
-                      className="btn primary"
-                      onClick={() => handleTranslate(job.job_id, firstTemplate)}
-                    >
-                      Translate to {firstTemplate.toUpperCase()}
-                    </button>
-                    <span className="muted">{job.normalized.length} normalized rows</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Vendor templates</h2>
-          </div>
-          {templates.length === 0 ? (
-            <p className="muted">No templates returned; check backend.</p>
-          ) : (
-            <div className="templates">
-              {templates.map((template) => (
-                <div key={template.vendor_key} className="template">
-                  <div className="template-heading">
-                    <h3>{template.display_name}</h3>
-                    <span className="badge">{template.version}</span>
-                  </div>
-                  <p className="muted">Format: {template.format.toUpperCase()}</p>
-                  <p className="muted">Required: {template.required_fields.join(", ")}</p>
-                  <ul className="notes">
-                    {template.mapping_notes.map((note) => (
-                      <li key={note}>{note}</li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {translation && (
-          <section className="panel">
-            <div className="panel-heading">
-              <h2>Latest translation</h2>
-              <span className="badge success">{translation.payload.vendor_key}</span>
-            </div>
-            <p className="muted">Preview the downstream payload for the selected vendor.</p>
-            <pre className="code-block">{JSON.stringify(translation.payload, null, 2)}</pre>
-            {translation.payload.human_readable && (
-              <p className="muted">{translation.payload.human_readable}</p>
-            )}
-          </section>
-        )}
       </main>
     </div>
   );
