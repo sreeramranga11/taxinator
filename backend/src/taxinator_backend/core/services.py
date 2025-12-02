@@ -10,12 +10,14 @@ from uuid import uuid4
 from taxinator_backend.core.models import (
     CostBasisIngestRequest,
     ExportReport,
+    IngestionRequest,
     IngestionResponse,
     IngestionSummary,
     JobRecord,
     JobStatus,
     JobSummary,
     NormalizedTransaction,
+    TransactionInput,
     PersonalInfoIngestRequest,
     PersonalInfoRecord,
     ReconciliationReport,
@@ -26,6 +28,7 @@ from taxinator_backend.core.models import (
     TranslationPayload,
     TranslationRequest,
     TranslationResponse,
+    UserRole,
     ValidationIssue,
     ValidationReport,
     VendorTemplate,
@@ -82,20 +85,21 @@ def start_job(request: StartJobRequest) -> StartJobResponse:
     )
 
 
-def _normalize_record(raw: dict) -> NormalizedTransaction:
+def _normalize_record(raw: dict | TransactionInput) -> NormalizedTransaction:
+    record = raw.model_dump() if isinstance(raw, TransactionInput) else raw
     mapped = {
-        "transaction_id": raw.get("transaction_id") or raw.get("id") or str(uuid4()),
-        "account_id": raw.get("account_id") or raw.get("account"),
-        "asset_symbol": raw.get("asset_symbol") or raw.get("symbol") or raw.get("asset"),
-        "quantity": Decimal(str(raw.get("quantity") or raw.get("qty") or "0")),
-        "cost_basis": Decimal(str(raw.get("cost_basis") or raw.get("basis") or "0")),
-        "proceeds": Decimal(str(raw.get("proceeds") or raw.get("amount") or "0")),
-        "acquisition_date": raw.get("acquisition_date") or raw.get("acquired") or raw.get("open_date"),
-        "disposition_date": raw.get("disposition_date") or raw.get("disposed") or raw.get("close_date"),
-        "lot_method": raw.get("lot_method") or raw.get("method") or "FIFO",
-        "cost_basis_source": raw.get("cost_basis_source"),
-        "wallet_address": raw.get("wallet_address"),
-        "memo": raw.get("memo") or raw.get("note"),
+        "transaction_id": record.get("transaction_id") or record.get("id") or str(uuid4()),
+        "account_id": record.get("account_id") or record.get("account"),
+        "asset_symbol": record.get("asset_symbol") or record.get("symbol") or record.get("asset"),
+        "quantity": Decimal(str(record.get("quantity") or record.get("qty") or "0")),
+        "cost_basis": Decimal(str(record.get("cost_basis") or record.get("basis") or "0")),
+        "proceeds": Decimal(str(record.get("proceeds") or record.get("amount") or "0")),
+        "acquisition_date": record.get("acquisition_date") or record.get("acquired") or record.get("open_date"),
+        "disposition_date": record.get("disposition_date") or record.get("disposed") or record.get("close_date"),
+        "lot_method": record.get("lot_method") or record.get("method") or "FIFO",
+        "cost_basis_source": record.get("cost_basis_source"),
+        "wallet_address": record.get("wallet_address"),
+        "memo": record.get("memo") or record.get("note"),
     }
     return NormalizedTransaction(**mapped)
 
@@ -248,6 +252,7 @@ def ingest_cost_basis(request: CostBasisIngestRequest) -> IngestionResponse:
         ingestion_summary=ingestion_summary,
         normalized=normalized,
         validation=validation_report,
+        warnings=validation_report.warnings,
     )
 
 
@@ -256,6 +261,48 @@ def ingest_personal_info(request: PersonalInfoIngestRequest) -> dict:
     job.personal_info = request.records
     _JOB_STORE[job.job_id] = job
     return {"job_id": job.job_id, "personal_info_records": len(request.records)}
+
+
+def ingest_legacy(request: IngestionRequest) -> IngestionResponse:
+    """Backward-compatible ingestion endpoint for simple cost-basis uploads."""
+
+    job_id = str(uuid4())
+    normalized = [_normalize_record(record) for record in request.transactions]
+    summary = _compute_summary(normalized)
+    ingestion_summary = IngestionSummary(
+        total_rows=len(request.transactions),
+        malformed_rows=0,
+        missing_fields=[],
+        unexpected_fields=[],
+        potential_schema_drift=False,
+    )
+    validation = ValidationReport(errors=[], warnings=[], suggested_fixes=[])
+
+    _JOB_STORE[job_id] = JobRecord(
+        job_id=job_id,
+        tax_year=date.today().year,
+        vendor_source=request.vendor.name,
+        vendor_target="fis",
+        status=JobStatus.READY_FOR_TRANSFORMATION,
+        normalized=normalized,
+        warnings=[],
+        ingestion_summary=ingestion_summary,
+        validation_report=validation,
+        translations={},
+        personal_info=[],
+        raw_cost_basis=[r.model_dump() if isinstance(r, TransactionInput) else r for r in request.transactions],
+        raw_trades=[],
+        started_by=UserRole.PROVIDER,
+    )
+
+    return IngestionResponse(
+        job_id=job_id,
+        summary=summary,
+        ingestion_summary=ingestion_summary,
+        normalized=normalized,
+        validation=validation,
+        warnings=validation.warnings,
+    )
 
 
 def ingest_trades(request: TradesIngestRequest) -> dict:
@@ -387,4 +434,3 @@ def get_job(job_id: str) -> JobRecord:
 
 def reset_store() -> None:
     _JOB_STORE.clear()
-

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, computed_field
 class UserRole(str, Enum):
     """Supported user personas for the service."""
 
+    PROVIDER = "provider"
     BROKER_ADMIN = "broker_admin"
     INTERNAL_OPS = "internal_ops"
     API_CLIENT = "api_client"
@@ -147,6 +148,7 @@ class IngestionResponse(BaseModel):
     ingestion_summary: IngestionSummary
     normalized: List[NormalizedTransaction]
     validation: "ValidationReport"
+    warnings: List[ValidationIssue] = []
 
 
 class JobStatus(str, Enum):

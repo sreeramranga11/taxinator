@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from taxinator_backend.core.config import metadata
 from taxinator_backend.core.models import (
     CostBasisIngestRequest,
+    IngestionRequest,
     IngestionResponse,
     JobRecord,
     PersonalInfoIngestRequest,
@@ -26,6 +27,7 @@ from taxinator_backend.core.services import (
     VENDOR_TEMPLATES,
     export,
     get_job,
+    ingest_legacy,
     ingest_cost_basis,
     ingest_personal_info,
     ingest_trades,
@@ -43,7 +45,7 @@ async def _role_dependency(x_user_role: Annotated[str | None, Header()] = None) 
     if not x_user_role:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-User-Role header; specify broker_admin, internal_ops, api_client, or tax_engine.",
+            detail="Missing X-User-Role header; specify provider, broker_admin, internal_ops, api_client, or tax_engine.",
         )
     try:
         return UserRole(x_user_role)
@@ -82,6 +84,18 @@ async def supported_roles() -> dict[str, list[str]]:
 @router.get("/templates", summary="Downstream vendor templates", response_model=list[VendorTemplate])
 async def templates() -> list[VendorTemplate]:
     return list(VENDOR_TEMPLATES.values())
+
+
+@router.post(
+    "/ingestions",
+    response_model=IngestionResponse,
+    summary="Legacy ingestion endpoint (auto-creates a job)",
+)
+async def legacy_ingestion(
+    request: IngestionRequest,
+    role: UserRole = Depends(require_role(UserRole.PROVIDER, UserRole.BROKER_ADMIN, UserRole.API_CLIENT)),
+) -> IngestionResponse:
+    return ingest_legacy(request)
 
 
 @router.post("/jobs/start", response_model=StartJobResponse, summary="Start a new tax job")
@@ -179,6 +193,24 @@ async def reconcile_job(
 
 
 @router.post(
+    "/jobs/{job_id}/translate",
+    response_model=TranslationResponse,
+    summary="Legacy translate alias for downstream vendor payload",
+)
+async def translate_job(
+    job_id: str,
+    request: TranslationRequest,
+    role: UserRole = Depends(require_role(UserRole.TAX_ENGINE, UserRole.BROKER_ADMIN, UserRole.INTERNAL_OPS)),
+) -> TranslationResponse:
+    try:
+        return transform(job_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
     "/jobs/{job_id}/export",
     summary="Export vendor-ready payload and emit webhook",
 )
@@ -269,4 +301,3 @@ async def sample_ingestion() -> dict[str, object]:
 async def reset(role: UserRole = Depends(require_role(UserRole.INTERNAL_OPS))):
     reset_store()
     return {"status": "reset"}
-

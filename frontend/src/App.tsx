@@ -75,8 +75,11 @@ type SamplePayload = {
   personal_info: unknown[];
 };
 
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "/api").replace(/\/$/, "");
+const buildUrl = (path: string) => `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+const DEFAULT_ROLE = "broker_admin";
+
 export function App() {
-  const [activeRole, setActiveRole] = useState("broker_admin");
   const [health, setHealth] = useState<Health | null>(null);
   const [templates, setTemplates] = useState<VendorTemplate[]>([]);
   const [sample, setSample] = useState<SamplePayload | null>(null);
@@ -94,7 +97,7 @@ export function App() {
   const [vendorTarget, setVendorTarget] = useState("fis");
 
   const fetchJson = async <T,>(path: string, role: string, options?: RequestInit): Promise<T> => {
-    const response = await fetch(path, {
+    const response = await fetch(buildUrl(path), {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -109,14 +112,14 @@ export function App() {
   };
 
   useEffect(() => {
-    fetchJson<Health>("/api/health", "broker_admin").then(setHealth).catch(() => setHealth(null));
-    fetchJson<VendorTemplate[]>("/api/templates", "broker_admin")
+    fetchJson<Health>("/health", DEFAULT_ROLE).then(setHealth).catch(() => setHealth(null));
+    fetchJson<VendorTemplate[]>("/templates", DEFAULT_ROLE)
       .then((data) => {
         setTemplates(data);
         setVendorTarget(data[0]?.vendor_key ?? "fis");
       })
       .catch(() => setTemplates([]));
-    fetchJson<{ payload: SamplePayload }>("/api/playbooks/sample-ingestion", "broker_admin")
+    fetchJson<{ payload: SamplePayload }>("/playbooks/sample-ingestion", DEFAULT_ROLE)
       .then((payload) => {
         setSample(payload.payload);
         setTaxYear(payload.payload.tax_year);
@@ -130,7 +133,7 @@ export function App() {
   }, []);
 
   const refreshJobs = () => {
-    fetchJson<JobRecord[]>("/api/jobs", "internal_ops")
+    fetchJson<JobRecord[]>("/jobs", DEFAULT_ROLE)
       .then((records) => {
         setJobs(records);
         if (currentJobId) {
@@ -144,13 +147,13 @@ export function App() {
   const startJob = async () => {
     setError(null);
     try {
-      const result = await fetchJson<{ job_id: string }>("/api/jobs/start", activeRole, {
+      const result = await fetchJson<{ job_id: string }>("/jobs/start", DEFAULT_ROLE, {
         method: "POST",
         body: JSON.stringify({
           tax_year: taxYear,
           vendor_source: vendorSource,
           vendor_target: vendorTarget,
-          started_by: activeRole,
+          started_by: DEFAULT_ROLE,
         }),
       });
       setCurrentJobId(result.job_id);
@@ -168,7 +171,7 @@ export function App() {
     setError(null);
     try {
       const records = JSON.parse(personalInfoEditor || "[]");
-      await fetchJson(`/api/ingest/personal-info`, activeRole, {
+      await fetchJson(`/ingest/personal-info`, DEFAULT_ROLE, {
         method: "POST",
         body: JSON.stringify({ job_id: currentJobId, records }),
       });
@@ -182,7 +185,7 @@ export function App() {
     setError(null);
     try {
       const records = JSON.parse(costBasisEditor || "[]");
-      const result = await fetchJson<IngestionResponse>("/api/ingest/costbasis", activeRole, {
+      const result = await fetchJson<IngestionResponse>("/ingest/costbasis", DEFAULT_ROLE, {
         method: "POST",
         body: JSON.stringify({ job_id: currentJobId, records }),
       });
@@ -195,7 +198,7 @@ export function App() {
 
   const fetchJob = async (jobId: string) => {
     try {
-      const record = await fetchJson<JobRecord>(`/api/jobs/${jobId}`, "internal_ops");
+      const record = await fetchJson<JobRecord>(`/jobs/${jobId}`, "internal_ops");
       setCurrentJob(record);
       refreshJobs();
     } catch (err) {
@@ -208,8 +211,8 @@ export function App() {
     setError(null);
     try {
       const result = await fetchJson<TranslationResponse>(
-        `/api/jobs/${currentJobId}/transform`,
-        "tax_engine",
+        `/jobs/${currentJobId}/transform`,
+        DEFAULT_ROLE,
         {
           method: "POST",
           body: JSON.stringify({ vendor_key: vendorTarget, include_normalized: true }),
@@ -226,7 +229,7 @@ export function App() {
     if (!currentJobId) return;
     setError(null);
     try {
-      await fetchJson(`/api/jobs/${currentJobId}/reconcile`, "internal_ops", { method: "POST" });
+      await fetchJson(`/jobs/${currentJobId}/reconcile`, DEFAULT_ROLE, { method: "POST" });
       await fetchJob(currentJobId);
     } catch (err) {
       setError((err as Error).message);
@@ -237,7 +240,7 @@ export function App() {
     if (!currentJobId) return;
     setError(null);
     try {
-      const result = await fetchJson<ExportResponse>(`/api/jobs/${currentJobId}/export`, "tax_engine", {
+      const result = await fetchJson<ExportResponse>(`/jobs/${currentJobId}/export`, DEFAULT_ROLE, {
         method: "POST",
       });
       setExportReport(result);
@@ -246,13 +249,6 @@ export function App() {
       setError((err as Error).message);
     }
   };
-
-  const personaCards = [
-    { key: "broker_admin", label: "Broker Admin", note: "Uploads cost basis + PII" },
-    { key: "internal_ops", label: "Internal Ops", note: "Reprocess & reconcile" },
-    { key: "tax_engine", label: "Tax Engine", note: "Transforms & exports" },
-    { key: "api_client", label: "API Client", note: "Headless ingestion" },
-  ];
 
   const pipelineSteps = [
     { title: "Data Ingestion", status: ingestionResult ? "Done" : "Pending" },
@@ -281,20 +277,6 @@ export function App() {
         </div>
 
         <nav className="nav">
-          <p className="nav-label">Personas</p>
-          <div className="persona-grid">
-            {personaCards.map((persona) => (
-              <button
-                key={persona.key}
-                className={`chip ${activeRole === persona.key ? "active" : ""}`}
-                onClick={() => setActiveRole(persona.key)}
-              >
-                <span>{persona.label}</span>
-                <small>{persona.note}</small>
-              </button>
-            ))}
-          </div>
-
           <p className="nav-label">Pipeline modules</p>
           <ul className="module-list">
             <li>Data ingestion</li>
@@ -322,16 +304,12 @@ export function App() {
       <main className="content">
         <header className="hero">
           <div>
-            <p className="eyebrow">Stripe-like middleware for tax reporting</p>
+            <p className="eyebrow">Middleware for tax reporting</p>
             <h1>Operations dashboard</h1>
             <p className="muted">
               Configure vendor templates, ingest datasets, validate compatibility, reconcile identities,
               and export vendor-ready tax payloads with webhook signals.
             </p>
-          </div>
-          <div className="hero-meta">
-            <div className="badge ghost">Active persona</div>
-            <div className="pill strong">{activeRole}</div>
           </div>
         </header>
 
@@ -617,4 +595,3 @@ export function App() {
 }
 
 export default App;
-
