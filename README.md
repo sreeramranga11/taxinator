@@ -1,6 +1,6 @@
 # Taxinator
 
-A dual frontend and backend project for a middleware platform that standardizes cost-basis data
+A backend + Next.js (web) project for a middleware platform that standardizes cost-basis data
 and delivers tax-engine ready payloads.
 
 ## Purpose
@@ -78,9 +78,11 @@ Reconciliation loop:
 ## Structure
 
 - `backend/`: FastAPI service for ingesting, validating, and transforming cost-basis data.
-- `frontend/`: React + Vite dashboard for configuring integrations and monitoring pipelines.
+- `web/`: Next.js + Tailwind UI with Tammy (AI) and manual flows.
 
 ## Getting started
 
-Each workspace can be bootstrapped independently. Refer to the README within `backend/` and
-`frontend/` for environment-specific instructions.
+- Backend: see `backend/README.md` (uvicorn, API keys, etc.).
+- Web app: see `web/README.md` (Next.js dev server, env vars like `NEXT_PUBLIC_API_BASE`).
+
+Note: The older `frontend/` (Vite) directory was used for testing/validation but is superseded by `web/`.

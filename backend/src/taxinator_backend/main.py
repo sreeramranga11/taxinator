@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from taxinator_backend.api.routes import router
 from taxinator_backend.core.config import metadata
@@ -12,6 +13,15 @@ app = FastAPI(
         "tax engines."
     ),
     version=metadata.version,
+)
+
+# Allow any origin for dev; adjust if you lock down hosts.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(router, prefix="/api")
