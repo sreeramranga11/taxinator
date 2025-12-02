@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import "./styles/global.css";
 
 type Health = {
@@ -46,8 +46,11 @@ type TranslationResponse = {
   payload: { vendor_key: string; records: unknown[]; human_readable?: string };
 };
 
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api").replace(/\/$/, "");
+const buildUrl = (path: string) => `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+const DEFAULT_INGEST_ROLE = "provider";
+
 export function App() {
-  const [activeRole, setActiveRole] = useState("provider");
   const [health, setHealth] = useState<Health | null>(null);
   const [templates, setTemplates] = useState<VendorTemplate[]>([]);
   const [samplePayload, setSamplePayload] = useState<string>("");
@@ -56,9 +59,14 @@ export function App() {
   const [translation, setTranslation] = useState<TranslationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preferredVendor, setPreferredVendor] = useState("fis");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const ingestionRef = useRef<HTMLElement | null>(null);
+  const jobsRef = useRef<HTMLElement | null>(null);
+  const templatesRef = useRef<HTMLElement | null>(null);
+  const healthRef = useRef<HTMLElement | null>(null);
 
   const fetchJson = async <T,>(path: string, role: string, options?: RequestInit): Promise<T> => {
-    const response = await fetch(path, {
+    const response = await fetch(buildUrl(path), {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -73,18 +81,18 @@ export function App() {
   };
 
   useEffect(() => {
-    fetchJson<Health>("/api/health", "admin")
+    fetchJson<Health>("/health", "admin")
       .then(setHealth)
       .catch(() => setHealth(null));
 
-    fetchJson<VendorTemplate[]>("/api/templates", "admin")
+    fetchJson<VendorTemplate[]>("/templates", "admin")
       .then((data) => {
         setTemplates(data);
         setPreferredVendor(data[0]?.vendor_key ?? "fis");
       })
       .catch(() => setTemplates([]));
 
-    fetchJson<{ payload: unknown }>("/api/playbooks/sample-ingestion", "admin")
+    fetchJson<{ payload: unknown }>("/playbooks/sample-ingestion", "admin")
       .then((payload) => setSamplePayload(JSON.stringify(payload.payload, null, 2)))
       .catch(() => setSamplePayload(""));
 
@@ -92,7 +100,7 @@ export function App() {
   }, []);
 
   const refreshJobs = () => {
-    fetchJson<JobRecord[]>("/api/jobs", "auditor")
+    fetchJson<JobRecord[]>("/jobs", "auditor")
       .then(setJobs)
       .catch(() => setJobs([]));
   };
@@ -101,7 +109,7 @@ export function App() {
     setError(null);
     try {
       const body = JSON.parse(samplePayload);
-      const result = await fetchJson<IngestionResponse>("/api/ingestions", activeRole, {
+      const result = await fetchJson<IngestionResponse>("/ingestions", DEFAULT_INGEST_ROLE, {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -112,10 +120,25 @@ export function App() {
     }
   };
 
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    try {
+      const contents = await file.text();
+      const parsed = JSON.parse(contents);
+      setSamplePayload(JSON.stringify(parsed, null, 2));
+    } catch (err) {
+      setError("Invalid JSON file. Please upload a valid JSON payload.");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
   const handleTranslate = async (jobId: string, vendorKey: string) => {
     setError(null);
     try {
-      const result = await fetchJson<TranslationResponse>(`/api/jobs/${jobId}/translate`, "tax_engine", {
+      const result = await fetchJson<TranslationResponse>(`/jobs/${jobId}/translate`, "tax_engine", {
         method: "POST",
         body: JSON.stringify({ vendor_key: vendorKey, include_normalized: true }),
       });
@@ -127,13 +150,17 @@ export function App() {
   };
 
   const firstTemplate = useMemo(() => preferredVendor || templates[0]?.vendor_key || "fis", [preferredVendor, templates]);
-  const personas = [
-    { key: "provider", label: "Provider", note: "Sends cost basis" },
-    { key: "auditor", label: "Auditor", note: "Reads jobs" },
-    { key: "tax_engine", label: "Tax engine", note: "Requests translations" },
-    { key: "admin", label: "Admin", note: "Views health & templates" },
-  ];
   const totalWarnings = jobs.reduce((acc, job) => acc + job.warnings.length, 0);
+  const navItems = [
+    { label: "Ingestion studio", ref: ingestionRef },
+    { label: "Jobs & translations", ref: jobsRef },
+    { label: "Vendor templates", ref: templatesRef },
+    { label: "Health & metadata", ref: healthRef },
+  ];
+
+  const scrollToSection = (sectionRef: React.RefObject<HTMLElement>) => {
+    sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div className="page">
@@ -148,26 +175,15 @@ export function App() {
         </div>
 
         <nav className="nav">
-          <p className="nav-label">Personas</p>
-          <div className="persona-grid">
-            {personas.map((persona) => (
-              <button
-                key={persona.key}
-                className={`chip ${activeRole === persona.key ? "active" : ""}`}
-                onClick={() => setActiveRole(persona.key)}
-              >
-                <span>{persona.label}</span>
-                <small>{persona.note}</small>
-              </button>
-            ))}
-          </div>
-
-          <p className="nav-label">Quick links</p>
+          <p className="nav-label">Navigation</p>
           <ul>
-            <li>Ingestion studio</li>
-            <li>Jobs & translations</li>
-            <li>Vendor templates</li>
-            <li>Health & metadata</li>
+            {navItems.map((item) => (
+              <li key={item.label}>
+                <button type="button" onClick={() => scrollToSection(item.ref)}>
+                  {item.label}
+                </button>
+              </li>
+            ))}
           </ul>
         </nav>
 
@@ -180,23 +196,19 @@ export function App() {
               <p className="muted">{health?.environment ?? "Awaiting connection"}</p>
             </div>
           </div>
-          <p className="muted small">Role headers required via X-User-Role.</p>
+          <p className="muted small">Role headers are applied automatically for each action.</p>
         </div>
       </aside>
 
       <main className="content">
         <header className="hero">
           <div>
-            <p className="eyebrow">Stripe-like middleware for tax reporting</p>
+            <p className="eyebrow">Middleware for tax reporting</p>
             <h1>Operations dashboard</h1>
             <p className="muted">
               Normalize cost-basis feeds, reconcile discrepancies, and deliver vendor-ready payloads
               that tax engines can ingest without brittle spreadsheets or manual rework.
             </p>
-          </div>
-          <div className="hero-meta">
-            <div className="badge ghost">Active persona</div>
-            <div className="pill strong">{activeRole}</div>
           </div>
         </header>
 
@@ -223,15 +235,27 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel highlight">
+        <section ref={ingestionRef} className="panel highlight">
           <div className="panel-heading">
             <div>
               <h2>Ingestion studio</h2>
               <p className="muted">Validate, normalize, and store cost-basis payloads.</p>
             </div>
-            <button className="btn primary" onClick={handleIngest}>
-              Normalize & store
-            </button>
+            <div className="panel-actions">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={handleImport}
+                style={{ display: "none" }}
+              />
+              <button className="btn" onClick={() => fileInputRef.current?.click()}>
+                Import JSON
+              </button>
+              <button className="btn primary" onClick={handleIngest}>
+                Normalize & store
+              </button>
+            </div>
           </div>
           <textarea
             className="editor"
@@ -251,7 +275,7 @@ export function App() {
         </section>
 
         <div className="two-column">
-          <section className="panel">
+          <section ref={jobsRef} className="panel">
             <div className="panel-heading">
               <div>
                 <h2>Jobs & translations</h2>
@@ -314,7 +338,7 @@ export function App() {
             )}
           </section>
 
-          <section className="panel minimal">
+          <section ref={templatesRef} className="panel minimal">
             <div className="panel-heading">
               <div>
                 <h2>Vendor templates</h2>
@@ -361,7 +385,7 @@ export function App() {
           </section>
         )}
 
-        <section className="panel subtle">
+        <section ref={healthRef} className="panel subtle">
           <div className="panel-heading">
             <h2>Health & metadata</h2>
             {health ? <span className="badge success">Online</span> : <span className="badge">Idle</span>}
